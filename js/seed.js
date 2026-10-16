@@ -130,7 +130,11 @@
   }
 
   // Siembra solo si la base está vacía (no pisa datos existentes).
+  // Aun así, garantiza los ajustes por defecto: si un navegador trae datos de una
+  // versión anterior sin 'bot_on', el bot se quedaría mudo y el simulador daría la
+  // impresión de no funcionar. No pisa un 'bot_on' ya elegido por el visitante.
   const seedIfEmpty = () => {
+    if (store.getSetting('bot_on') === null) store.setSetting('bot_on', '1')
     if (store.getContacts().length > 0) return 0
     return insertAll()
   }

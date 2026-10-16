@@ -53,6 +53,8 @@ function esc(s) {
 }
 const norm = (s) => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
 const initials = (name) => (name || '?').trim().split(/\s+/).slice(0, 2).map((w) => w[0] || '').join('').toUpperCase()
+// Color pastel estable por nombre (paleta lavanda / menta / beige / rosa).
+const avColor = (name) => 'av-' + (Array.from(String(name || '?')).reduce((a, ch) => a + ch.charCodeAt(0), 0) % 4)
 const fmtTime = (ts) => new Date(ts).toLocaleTimeString('es-CO', { hour: 'numeric', minute: '2-digit', hour12: true })
 const fmtAppt = (iso) => {
   const d = new Date(iso)
@@ -78,6 +80,7 @@ function toast(msg, ok = true) {
   const el = $('#toast')
   el.textContent = msg
   el.classList.toggle('err', !ok)
+  el.classList.toggle('ok', ok)
   el.classList.remove('hidden')
   clearTimeout(toastTimer)
   toastTimer = setTimeout(() => el.classList.add('hidden'), 3200)
@@ -181,7 +184,7 @@ function renderContactList() {
     const time = c.last ? fmtTime(c.last.ts) : ''
     const appt = c.appointment ? '<span class="pill p-mute">' + icon('cal', 11) + ' ' + esc(fmtShort(c.appointment)) + '</span>' : ''
     row.innerHTML = `
-      <div class="avatar">${esc(initials(name))}</div>
+      <div class="avatar ${avColor(name)}">${esc(initials(name))}</div>
       <div class="c-body">
         <div class="c-top"><span class="c-name">${esc(name)}</span><span class="c-time">${time}</span></div>
         <div class="c-prev">${last}</div>
@@ -439,6 +442,7 @@ function simSend(text) {
   const body = (text != null ? text : input.value).trim()
   if (!body) { toast('Escribe un mensaje', false); return }
   if (!simulator) { toast('El simulador no está disponible', false); return }
+  if (!dbBotOn) toast('El bot está en pausa: actívalo con el botón «Bot» de arriba para ver cómo responde', false)
   const name = $('#sim-name').value.trim()
   input.value = ''
   simSetTyping(true, false)
@@ -494,7 +498,7 @@ function renderInicio() {
           const st = statusInfo(c)
           const last = c.last ? esc(String(c.last.body || '').slice(0, 60)) : ''
           return `<button class="drow" data-j="${esc(c.jid)}">
-            <div class="avatar">${esc(initials(contactName(c)))}</div>
+            <div class="avatar ${avColor(contactName(c))}">${esc(initials(contactName(c)))}</div>
             <div class="dbody"><span class="nm">${esc(contactName(c))}</span><span class="pr">${last || 'Sin mensajes todavía'}</span></div>
             ${st.text ? `<span class="pill ${st.cls}">${esc(st.text)}</span>` : ''}
           </button>`
@@ -641,7 +645,12 @@ function renderStats() {
 const TAB_TITLES = { simulador: 'Simulador', inicio: 'Inicio', chats: 'Conversaciones', citas: 'Citas', flujo: 'Flujo del bot', estadisticas: 'Métricas' }
 function setTab(name) {
   tab = name
-  document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('active', b.dataset.tab === name))
+  document.querySelectorAll('.tab').forEach((b) => {
+    const on = b.dataset.tab === name
+    b.classList.toggle('active', on)
+    if (on) b.setAttribute('aria-current', 'page')
+    else b.removeAttribute('aria-current')
+  })
   document.querySelectorAll('.pane').forEach((p) => p.classList.toggle('active', p.id === 'pane-' + name))
   const title = $('#page-title')
   if (title) title.textContent = TAB_TITLES[name] || ''
@@ -673,13 +682,32 @@ function updateBadges() {
 function fillChatHeader() {
   if (!selected) return
   const name = (current && contactName(current)) || selected
+  const col = avColor(name)
   $('#chat-name').textContent = name
-  $('#chat-avatar').textContent = initials(name)
-  const parts = []
+  const chatAv = $('#chat-avatar')
+  chatAv.textContent = initials(name)
+  chatAv.className = 'avatar ' + col
   const st = current ? statusInfo(current) : null
+  const parts = []
   if (st && st.text) parts.push(esc(st.text))
   if (current && current.appointment) parts.push(icon('cal', 11) + ' ' + esc(fmtAppt(current.appointment)))
   $('#chat-sub').innerHTML = parts.join(' · ')
+
+  // Panel auxiliar (ficha del contacto)
+  const infoAv = $('#info-avatar')
+  if (infoAv) {
+    infoAv.textContent = initials(name)
+    infoAv.className = 'avatar ' + col
+  }
+  const infoName = $('#info-name')
+  if (infoName) infoName.textContent = name
+  const infoPhone = $('#info-phone')
+  if (infoPhone) infoPhone.textContent = (current && current.phone) || '—'
+  const infoStatus = $('#info-status')
+  if (infoStatus) {
+    infoStatus.textContent = (st && st.text) || 'Sin ficha'
+    infoStatus.className = 'pill ' + ((st && st.cls) || 'p-mute')
+  }
 }
 
 function renderApptBar() {
@@ -891,6 +919,10 @@ function openChat(jid) {
 
 function closeChat() {
   document.body.classList.remove('chat-open')
+  const view = $('#chat-view')
+  if (view) view.classList.remove('chat-info-open')
+  const infoBtn = $('#btn-info')
+  if (infoBtn) infoBtn.setAttribute('aria-expanded', 'false')
   // Sin chat abierto, los mensajes nuevos no deben marcarse como leídos
   selected = null
   current = null
@@ -1097,6 +1129,17 @@ $('#btn-reminder').addEventListener('click', () => { if (selected) sendReminder(
 $('#btn-step').addEventListener('click', openStepModal)
 $('#btn-back').addEventListener('click', closeChat)
 
+// Panel auxiliar (ficha del contacto): visible en escritorio, plegable en pantallas estrechas.
+function toggleChatInfo(force) {
+  const view = $('#chat-view')
+  const open = force != null ? force : !view.classList.contains('chat-info-open')
+  view.classList.toggle('chat-info-open', open)
+  const btn = $('#btn-info')
+  if (btn) btn.setAttribute('aria-expanded', open ? 'true' : 'false')
+}
+$('#btn-info').addEventListener('click', () => toggleChatInfo())
+$('#btn-info-close').addEventListener('click', () => toggleChatInfo(false))
+
 // ---------- Bot global on/off ----------
 function renderBotBtn() {
   const b = $('#btn-bot')
@@ -1125,6 +1168,7 @@ socket.on('bootstrap', (data) => {
   if (tab === 'simulador' && simulator) loadSimMessages()
   if (tab === 'flujo') renderFlow()
   if (selected) loadMessages(selected) // por si se reabre sobre un chat ya cargado
+  hideBoot() // la demo ya tiene datos: quita la pantalla de carga
 })
 
 socket.on('settings-updated', (s) => {
@@ -1171,3 +1215,45 @@ renderBotBtn()
 
 // Aviso de demo estática: se puede cerrar
 $('#demo-banner-close').addEventListener('click', () => $('#demo-banner').classList.add('hidden'))
+
+// ---------- Pantalla de carga inicial ----------
+// Cubre la siembra + el arranque del motor para que la demo aparezca ya lista.
+// El motor avisa con 'bootstrap'; aquí se oculta con un mínimo visible y una red
+// de seguridad por si el aviso tarda.
+const bootEl = $('#boot')
+const bootStart = performance.now()
+let bootHidden = false
+function hideBoot() {
+  if (bootHidden) return
+  bootHidden = true
+  const wait = Math.max(0, 520 - (performance.now() - bootStart))
+  setTimeout(() => {
+    if (bootEl) {
+      bootEl.classList.add('boot-hide')
+      setTimeout(() => bootEl && bootEl.remove(), 420)
+    }
+    if (!liteAck) showLite()
+  }, wait)
+}
+setTimeout(() => { if (!bootHidden && window.AuroraEngine) hideBoot() }, 2500)
+
+// ---------- Pop-up de entrada: aviso de versión lite ----------
+const LITE_KEY = 'aurora-crm-demo-lite-ack'
+const liteOverlay = $('#lite-overlay')
+function hideLite() {
+  liteOverlay.classList.add('hidden')
+  if ($('#lite-noshow').checked) {
+    try { localStorage.setItem(LITE_KEY, '1') } catch (e) { /* modo privado: se muestra de nuevo */ }
+  }
+}
+function showLite() {
+  liteOverlay.classList.remove('hidden')
+  $('#lite-enter').focus()
+}
+let liteAck = false
+try { liteAck = localStorage.getItem(LITE_KEY) === '1' } catch (e) { liteAck = false }
+$('#lite-enter').addEventListener('click', hideLite)
+liteOverlay.addEventListener('click', (e) => { if (e.target === liteOverlay) hideLite() })
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !liteOverlay.classList.contains('hidden')) hideLite()
+})
